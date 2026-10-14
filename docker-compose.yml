@@ -1,0 +1,143 @@
+# Single-operator DVN node bundle.
+#
+# ── One-time onboarding (generates keys + the dashboard payload) ───────────────
+#   1. cp .env.example .env   and fill in the values
+#   2. docker compose run --rm onboard
+#   3. Upload ./keys/registration-payload.json to the DVN dashboard and complete
+#      key registration + staking from your wallet (MetaMask)
+#
+# ── Run the node ──────────────────────────────────────────────────────────────
+#   docker compose up -d
+#
+# Keys live in ./keys (gitignored). keys.secret.json holds your PRIVATE keys —
+# back it up and keep it secret. Re-running `onboard` reuses existing keys.
+
+x-rpc-env: &rpc-env
+  L1_RPC: ${L1_RPC}
+
+services:
+  # ── One-time onboarding (does NOT start on `up`; invoke with `run`) ──────────
+  onboard:
+    image: ${VN_NODE_IMAGE:-ghcr.io/conduitxyz/arbitrum-dvn}:${VN_NODE_TAG:-latest}
+    profiles: ["onboard"]
+    entrypoint: ["/scripts/onboard.sh"]
+    volumes:
+      - ./scripts/onboard.sh:/scripts/onboard.sh:ro
+      - ./keys:/keys
+    environment:
+      OPERATOR_ADDRESS: ${OPERATOR_ADDRESS}
+      ADDRESS_REGISTRY: ${ADDRESS_REGISTRY}
+      L1_RPC: ${L1_RPC}
+
+  # ── Relay sidecar ───────────────────────────────────────────────────────────
+  relay-sidecar:
+    image: ${RELAY_IMAGE:-symbioticfi/relay}:${RELAY_TAG:-1.2.0}
+    container_name: dvn-relay-sidecar
+    entrypoint: ["/bin/sh", "/scripts/sidecar-start.sh"]
+    command: ["/app/data"]
+    volumes:
+      - ./scripts/sidecar-start.sh:/scripts/sidecar-start.sh:ro
+      - ./keys:/keys:ro
+      - sidecar-data:/app/data
+    environment:
+      <<: *rpc-env
+      BOOTNODE: ${BOOTNODE}
+      # Epoch retention (fast start + bounded DB). Empty = script default.
+      RELAY_RETENTION_EPOCHS: ${RELAY_RETENTION_EPOCHS:-}
+      RELAY_PRUNER_ENABLED: ${RELAY_PRUNER_ENABLED:-}
+    ports:
+      - "8080:8080"   # relay API
+      - "8880:8880"   # libp2p
+    restart: unless-stopped
+
+  # ── VN validator node ───────────────────────────────────────────────────────
+  vn-node:
+    image: ${VN_NODE_IMAGE:-ghcr.io/conduitxyz/arbitrum-dvn}:${VN_NODE_TAG:-latest}
+    container_name: dvn-vn-node
+    entrypoint: ["/bin/sh", "/scripts/vn-node-start.sh"]
+    command: ["http://relay-sidecar:8080/api/v1"]
+    volumes:
+      - ./scripts/vn-node-start.sh:/scripts/vn-node-start.sh:ro
+      - ./keys:/keys:ro
+      - vn-data:/data
+    environment:
+      <<: *rpc-env
+      OPERATOR_ADDRESS: ${OPERATOR_ADDRESS}
+      ADDRESS_REGISTRY: ${ADDRESS_REGISTRY}
+      # Build identifier the node reports to Conduit's proxy, so version skew
+      # across the operator fleet is visible during a rollout. The tag only —
+      # the proxy clamps this to 32 chars and rejects anything outside
+      # [A-Za-z0-9._-], so a full image ref would be dropped.
+      VN_NODE_VERSION: ${VN_NODE_TAG:-latest}
+      # Conduit's proxy batch-pull endpoint. When set, the node dials out to it,
+      # authenticates with its header BLS key, and co-signs pulled batches.
+      PROXY_PULL_URL: ${PROXY_PULL_URL:-}
+    ports:
+      - "9090:9090"   # batch verifier / health API
+    depends_on:
+      relay-sidecar:
+        condition: service_started
+      # The node reads L2 from the co-located follower, so wait until the
+      # follower's RPC is healthy before starting — otherwise the node's startup
+      # ChainID() call fails and it crash-restarts until the follower is up.
+      nitro-follower:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── chainInfo fetch (one-shot init for the follower) ──────────────────────
+  # Fetches + unwraps chainInfo.json into the shared /config volume BEFORE the
+  # follower starts, using a small alpine image with jq — so the unwrap never
+  # depends on the Nitro image shipping jq. Mirrors the staging init-container.
+  nitro-follower-init:
+    image: alpine:3.20
+    container_name: dvn-nitro-follower-init
+    entrypoint: ["/bin/sh", "/scripts/fetch-chaininfo.sh"]
+    volumes:
+      - ./scripts/fetch-chaininfo.sh:/scripts/fetch-chaininfo.sh:ro
+      - follower-config:/config
+    environment:
+      FOLLOWER_CHAIN_INFO_URL: ${FOLLOWER_CHAIN_INFO_URL:-}
+    restart: "no"
+
+  # ── Nitro follower (STF verification) ─────────────────────────────────────
+  # Read-only, feed-following Nitro node. Independently re-executes ArbOS so the
+  # vn-node reads L2 state roots from a node the operator controls. Always on —
+  # the vn-node reads L2 from it (http://nitro-follower:8449).
+  nitro-follower:
+    image: ${NITRO_FOLLOWER_IMAGE:-offchainlabs/nitro-node:v3.11.3-beb2108}
+    container_name: dvn-nitro-follower
+    entrypoint: ["/bin/sh", "/scripts/follower-start.sh"]
+    volumes:
+      - ./scripts/follower-start.sh:/scripts/follower-start.sh:ro
+      - follower-config:/config
+      - follower-data:/home/user/.arbitrum
+    environment:
+      L1_RPC: ${L1_RPC}
+      L1_BEACON_URL: ${L1_BEACON_URL:-}
+      PARENT_CHAIN_HAS_BLOBS: ${PARENT_CHAIN_HAS_BLOBS:-true}
+      FOLLOWER_FEED_URL: ${FOLLOWER_FEED_URL:-}
+      FOLLOWER_DA_MODE: ${FOLLOWER_DA_MODE:-calldata}
+      FOLLOWER_DAS_URL: ${FOLLOWER_DAS_URL:-}
+      FOLLOWER_DAS_ONLINE_URL: ${FOLLOWER_DAS_ONLINE_URL:-}
+      FOLLOWER_BEACON_URL: ${FOLLOWER_BEACON_URL:-}
+    depends_on:
+      nitro-follower-init:
+        condition: service_completed_successfully
+    ports:
+      - "8449:8449"   # follower JSON-RPC
+    # Healthy once the JSON-RPC answers eth_chainId (the port opens early, before
+    # full sync — which is exactly when the node's startup ChainID() would succeed).
+    # vn-node gates on this in enforce mode. curl is present in the Nitro image.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -X POST -H 'Content-Type: application/json' --data '{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}' http://localhost:8449 | grep -q result"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  sidecar-data: {}
+  vn-data: {}
+  follower-config: {}
+  follower-data: {}

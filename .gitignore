@@ -1,0 +1,8 @@
+# Operator runtime state — NEVER commit these.
+# keys/ contains keys.secret.json (your PRIVATE keys) plus generated artifacts.
+keys/
+
+# Your filled-in environment file (may contain endpoints/addresses).
+.env
+.env.*
+!.env.example
