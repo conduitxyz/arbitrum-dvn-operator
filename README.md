@@ -11,9 +11,12 @@ This bundle runs three containers:
   state so the vn-node verifies block state roots against a node you control.
 
 Your **operator wallet (MetaMask)** is your on-chain identity and holds your
-stake. It is **never** imported into the node — the node generates its own keys
-and binds them to your wallet address via signed proofs. You register those keys
-and stake from your wallet in the DVN dashboard.
+stake. It is **never** imported into the node: the node has its own keys, bound
+to your wallet address by signed proofs.
+
+You do everything from the **DVN dashboard**: it generates your node's keys,
+registers them and your stake from your wallet, and downloads this bundle with a
+complete `.env` and your keys. You don't edit any configuration by hand.
 
 ---
 
@@ -37,64 +40,47 @@ and stake from your wallet in the DVN dashboard.
   chain age/throughput — start here and scale up if the follower lags.
 
 - **Docker** with **Compose v2** (`docker compose`, not `docker-compose`).
-- An **operator wallet** with the required amount of the staking token.
-- The **network parameters** published by the DVN operator:
-  - `ADDRESS_REGISTRY` (one contract address; everything else is resolved from it)
-  - an `L1_RPC` (parent-chain) endpoint — you do **not** need an L2 RPC; the
-    bundle runs its own Nitro follower and the node reads L2 only from that
-  - `BOOTNODE` multiaddr
-  - the image tag (`VN_NODE_TAG`) to run
+  Images are published for `linux/amd64` and `linux/arm64`.
+- An **operator wallet** (MetaMask or any injected wallet) holding the native
+  token for gas and the staking token. On testnets the dashboard can mint the
+  staking token for you.
+- Your own **parent-chain RPC endpoint** (e.g. a free Alchemy or QuickNode key).
+  The node, relay sidecar and follower all read the parent chain continuously;
+  public endpoints rate-limit and will throttle your node. You do **not** need an
+  L2 RPC — the bundle runs its own Nitro follower.
+- Inbound **`8880/tcp`** reachable from the internet (relay peer-to-peer).
 
 ---
 
-## Step 1 — Configure
+## Step 1 — Become an operator in the dashboard
+
+1. Open the DVN dashboard and connect your operator wallet.
+2. Click **Become an operator** and follow the steps:
+   - **Sign** one message proving your wallet owns the node's new keys (no gas).
+   - **Stake amount** — choose how much to stake (on testnets, mint it here).
+   - **Register** — approve the transactions that register your keys, register
+     you as an operator, opt you into the network and your vault, and deposit
+     your stake.
+   - **Download** — enter your parent-chain RPC URL and download your bundle.
+
+Your node's keys are generated **in your browser** and are only ever written into
+the zip you download — they are never sent to Conduit or anywhere else. Keep the
+zip somewhere safe.
+
+The bundle contains:
+
+- `docker-compose.yml`, `scripts/` — the node itself (this repository)
+- `.env` — every setting, filled in for this network
+- `keys/keys.secret.json` — your node's **private keys**. **Back this up and keep it secret.**
+- `keys/secret-keys.txt`, `keys/network.env` — derived from the above; read by the node
+
+---
+
+## Step 2 — Run the node
 
 ```bash
-cp .env.example .env
-```
-
-Edit `.env` and fill in every value. At minimum:
-
-| Variable           | What it is                                                                                                              |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `OPERATOR_ADDRESS` | Your operator wallet address (keys bind to this; holds the stake)                                                       |
-| `ADDRESS_REGISTRY` | The DVN's on-chain AddressRegistry                                                                                      |
-| `L1_RPC`           | Your parent-chain (L1) RPC endpoint. No L2 RPC is needed — the bundle's own Nitro follower is the node's only L2 source |
-| `BOOTNODE`         | libp2p bootnode multiaddr to join the relay network                                                                     |
-| `VN_NODE_TAG`      | The exact release tag the DVN told you to run (do **not** use `latest`)                                                 |
-
----
-
-## Step 2 — Onboard (generate keys + registration payload)
-
-```bash
-docker compose run --rm onboard
-```
-
-This generates your keys and writes them to `./keys/`:
-
-- `keys.secret.json` — your **private keys** (BLS, p2p). **Back this up and keep it secret.**
-- `secret-keys.txt`, `network.env` — consumed by the node; no action needed.
-- `registration-payload.json` — the **public** payload you give to the dashboard.
-
-Re-running `onboard` is safe — it reuses existing keys. (Validator-set headers are
-posted on-chain by Conduit each epoch, so operators pay no gas for them.)
-
----
-
-## Step 3 — Register + stake in the dashboard
-
-1. Open the DVN dashboard and connect the **same wallet** as `OPERATOR_ADDRESS`.
-2. Upload `./keys/registration-payload.json`.
-3. Approve the key-registration transactions and stake — all signed from your
-   wallet. (The dashboard will refuse if the connected wallet doesn't match the
-   payload's operator address.)
-
----
-
-## Step 4 — Run the node
-
-```bash
+unzip dvn-operator-*.zip
+cd dvn-operator-*/
 docker compose up -d
 ```
 
@@ -105,11 +91,19 @@ docker compose logs -f
 curl -s localhost:9090/health
 ```
 
+The follower first syncs the L2 chain, which can take a while on a long-lived
+chain. Your stake joins the validator set at the **next epoch boundary**, so your
+node starts signing up to one epoch after you register; the dashboard shows you
+as an operator from then on.
+
 To stop:
 
 ```bash
 docker compose down
 ```
+
+To stop being an operator, use **Leave as operator** in the dashboard (it
+unregisters you and starts the stake withdrawal), then `docker compose down`.
 
 ---
 
@@ -121,10 +115,11 @@ _you_ control) and signs its post-state root into every attestation, so a quorum
 becomes a proof that the operators agree on the computed state — not just on what
 the sequencer reported. This is on by default; `docker compose up -d` starts it.
 
-You must set the `FOLLOWER_*` values published by the DVN (feed URL, chainInfo URL,
-DA mode + DA endpoint for your chain's mode) and `L1_BEACON_URL` — the follower
-reads L2 batches from L1, so it needs an L1 beacon (consensus-layer) endpoint in
-every DA mode (same class of dependency as `L1_RPC`).
+The `FOLLOWER_*` values (feed URL, chainInfo URL, DA mode and endpoint) come
+filled in from the dashboard. If the parent chain has blobs (Ethereum, Sepolia),
+the follower also needs a parent-chain beacon endpoint (`L1_BEACON_URL`); the
+dashboard asks for it when it applies. HyperEVM has no blobs, so none is needed
+there.
 
 How it fits together:
 
@@ -158,7 +153,9 @@ relay network.
 
 ## Upgrading
 
-Bump `VN_NODE_TAG` (and `RELAY_TAG` if the DVN changes it) in `.env`, then:
+When the DVN announces a new release, bump `VN_NODE_TAG` (and `RELAY_TAG` if it
+changes) in `.env` and update `docker-compose.yml` and `scripts/` from this
+repository at the same tag, then:
 
 ```bash
 docker compose pull
@@ -186,9 +183,8 @@ Set `RELAY_RETENTION_EPOCHS=0` to keep full history instead (archive node). It c
 had pruned one, those signatures would never produce a proof — so the sidecar refuses to start.
 
 That value only governs validator sets, which are tiny. Disk usage comes from proofs and signatures
-(~3.5 KB per L2 block), bounded separately by `RELAY_DATA_RETENTION_EPOCHS`. Leave it empty unless
-the DVN gives you a value; on networks with long epochs it will typically be lower, e.g. `24` at
-1-hour epochs for one day of proofs.
+(~3.5 KB per L2 block), bounded separately by `RELAY_DATA_RETENTION_EPOCHS`. The dashboard sets it to about
+one day's worth for the network's epoch length, e.g. `24` at 1-hour epochs.
 
 ---
 
@@ -197,6 +193,7 @@ the DVN gives you a value; on networks with long epochs it will typically be low
 - `./keys/keys.secret.json` holds your private keys. Back it up securely; anyone
   with it controls your node's signing keys. It is git-ignored — never commit it.
 - Your operator wallet's private key is never needed by, or given to, the node.
-- The `registration-payload.json` contains **no secrets** and is safe to upload.
+- The `.env` contains your RPC URL (which may embed a provider key) but no
+  private keys.
 
 ---
