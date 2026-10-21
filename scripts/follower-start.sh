@@ -98,5 +98,8 @@ exec /usr/local/bin/nitro \
     --http.api net,web3,eth,arb \
     --http.corsdomain '*' \
     --http.vhosts '*' \
+    --ws.addr 0.0.0.0 \
+    --ws.port 8450 \
+    --ws.origins '*' \
     --ensure-rollup-deployment=false \
     $DA_FLAGS

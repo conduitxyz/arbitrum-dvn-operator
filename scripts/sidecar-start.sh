@@ -27,51 +27,87 @@ if [ -z "$VAL_SET_DRIVER" ] || [ -z "$L1_CHAIN_ID" ]; then
     exit 1
 fi
 
-# ── Fast epoch sync: retention + pruner ──────────────────────────────────────
+# ── Retention, sync and aggregation ──────────────────────────────────────────
 # Without retention a fresh sidecar syncs EVERY epoch from genesis before its
-# API comes up — O(currentEpoch) L1 reads that grow with network age, so a new
-# operator joining a long-running network waits (and is at the mercy of their
-# L1 RPC). Retention makes a fresh node start at currentEpoch-N+1 instead, and
-# the pruner keeps a rolling N-epoch window so the DB stops growing forever.
+# API comes up — O(currentEpoch) L1 reads that grow with network age. Retention
+# makes a fresh node start at currentEpoch-N+1 instead, and the pruner keeps a
+# rolling window so the DB stops growing forever.
 #
-# N must stay well above the node's --attestation-epoch-window (default 8):
-# attestations can be pinned that many epochs back, and asking the sidecar for
-# a pruned epoch makes signing succeed but its proof never arrive.
+# Valset retention (RELAY_RETENTION_EPOCHS) has a hard floor of 144: the node
+# pins each block's attestation to a fixed epoch and only moves off it once it
+# falls 120 epochs behind, so this sidecar must still hold the valset for any
+# epoch up to 120 back — otherwise signing succeeds but the proof never arrives.
+# Valsets are tiny, so a high value is cheap. 0 = unlimited (archive node).
+#
+# Proofs and signatures are the bulk of the DB (~3.5 KB per block) and grow with
+# blocks, not epochs, so they have their own knob, RELAY_DATA_RETENTION_EPOCHS
+# (default = valset retention). On long epochs size it by time: e.g. 24 at
+# 1-hour epochs keeps a day of proofs instead of six.
 #
 # NOTE: this only changes the START POINT on a FRESH data dir. A sidecar that
 # already synced from genesis resumes from its stored head and merely starts
 # pruning — wipe the volume (docker compose down -v) to get the fast start.
-# 0 = unlimited (archive node; syncs from genesis, never prunes).
 RETENTION_EPOCHS="${RELAY_RETENTION_EPOCHS:-144}"
+DATA_RETENTION_EPOCHS="${RELAY_DATA_RETENTION_EPOCHS:-$RETENTION_EPOCHS}"
+if [ "$RETENTION_EPOCHS" != "0" ] && [ "$RETENTION_EPOCHS" -lt 144 ]; then
+    echo "ERROR: RELAY_RETENTION_EPOCHS=$RETENTION_EPOCHS is below 144."
+    echo "  Attestations can stay pinned to an epoch up to 120 back, and the sidecar"
+    echo "  would prune its validator set first. Raise it, or set"
+    echo "  RELAY_DATA_RETENTION_EPOCHS to bound storage instead."
+    exit 1
+fi
+
+# How far back this sidecar asks peers for proofs it is missing — what lets a
+# node that was down recover proofs aggregated in the meantime. The relay
+# default of 5 covers only ~20 min at 10-min epochs once the pin offset is
+# subtracted; 24 covers ~3.5h (~23h at 1-hour epochs). Must be <= valset retention.
+SYNC_EPOCHS=24
+if [ "$RETENTION_EPOCHS" != "0" ] && [ "$RETENTION_EPOCHS" -lt "$SYNC_EPOCHS" ]; then
+    SYNC_EPOCHS="$RETENTION_EPOCHS"
+fi
+
 RETENTION_BLOCK=""
 if [ "$RETENTION_EPOCHS" != "0" ]; then
-    # sync.epochs must be <= retention or the sidecar refuses to start.
-    SYNC_EPOCHS=5
-    [ "$RETENTION_EPOCHS" -lt 5 ] && SYNC_EPOCHS="$RETENTION_EPOCHS"
+    if [ "$DATA_RETENTION_EPOCHS" -gt "$RETENTION_EPOCHS" ] || [ "$DATA_RETENTION_EPOCHS" -lt 1 ]; then
+        echo "ERROR: RELAY_DATA_RETENTION_EPOCHS=$DATA_RETENTION_EPOCHS must be between 1 and RELAY_RETENTION_EPOCHS=$RETENTION_EPOCHS"
+        exit 1
+    fi
     RETENTION_BLOCK=$(cat <<EOFRET
 
 retention:
   valset-epochs: $RETENTION_EPOCHS
-  proof-epochs: $RETENTION_EPOCHS
-  signature-epochs: $RETENTION_EPOCHS
+  proof-epochs: $DATA_RETENTION_EPOCHS
+  signature-epochs: $DATA_RETENTION_EPOCHS
 
 pruner:
   enabled: ${RELAY_PRUNER_ENABLED:-true}
   interval: 1h
   batch-size: 100
   batch-pause: 100ms
-
-sync:
-  epochs: $SYNC_EPOCHS
 EOFRET
 )
 fi
+
+# Each epoch has ONE designated aggregator, and every block pinned to that epoch
+# depends on it: if it is offline, no proof forms and the whole network stalls.
+# Cross-epoch aggregation lets the latest epoch's aggregator also aggregate
+# older-epoch requests, so one offline operator no longer stops everyone.
+SYNC_AGG_BLOCK=$(cat <<EOFSYNC
+
+sync:
+  epochs: $SYNC_EPOCHS
+
+aggregation:
+  cross-epoch-aggregation: true
+EOFSYNC
+)
 
 echo "Starting sidecar:"
 echo "  Driver:    $VAL_SET_DRIVER (chain $L1_CHAIN_ID)"
 echo "  Bootnode:  $BOOTNODE"
 echo "  Storage:   $STORAGE_DIR"
-echo "  Retention: ${RETENTION_EPOCHS} epochs (0 = unlimited/from genesis)"
+echo "  Retention: valsets ${RETENTION_EPOCHS}, proofs/signatures ${DATA_RETENTION_EPOCHS} epochs (0 = unlimited/from genesis)"
+echo "  Sync:      ${SYNC_EPOCHS} epochs; cross-epoch aggregation on"
 
 cat > /tmp/sidecar.yaml <<EOF
 log:
@@ -101,7 +137,7 @@ p2p:
 evm:
   chains:
     - "$L1_RPC"
-  max-calls: 30${RETENTION_BLOCK}
+  max-calls: 30${RETENTION_BLOCK}${SYNC_AGG_BLOCK}
 EOF
 
 exec /app/relay_sidecar \

@@ -181,9 +181,14 @@ docker compose down -v      # deletes the sidecar volume — keys in ./keys/ are
 docker compose up -d
 ```
 
-Set `RELAY_RETENTION_EPOCHS=0` to keep full history instead (archive node). Don't lower it below
-the value the DVN recommends: the node signs attestations that can reference recent past epochs,
-and if the sidecar has already pruned one, those signatures never produce a proof.
+Set `RELAY_RETENTION_EPOCHS=0` to keep full history instead (archive node). It cannot go below
+**144**: the node signs attestations that can reference epochs up to 120 back, and if the sidecar
+had pruned one, those signatures would never produce a proof — so the sidecar refuses to start.
+
+That value only governs validator sets, which are tiny. Disk usage comes from proofs and signatures
+(~3.5 KB per L2 block), bounded separately by `RELAY_DATA_RETENTION_EPOCHS`. Leave it empty unless
+the DVN gives you a value; on networks with long epochs it will typically be lower, e.g. `24` at
+1-hour epochs for one day of proofs.
 
 ---
 

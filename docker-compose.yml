@@ -44,6 +44,7 @@ services:
       BOOTNODE: ${BOOTNODE}
       # Epoch retention (fast start + bounded DB). Empty = script default.
       RELAY_RETENTION_EPOCHS: ${RELAY_RETENTION_EPOCHS:-}
+      RELAY_DATA_RETENTION_EPOCHS: ${RELAY_DATA_RETENTION_EPOCHS:-}
       RELAY_PRUNER_ENABLED: ${RELAY_PRUNER_ENABLED:-}
     ports:
       - "8080:8080"   # relay API
@@ -125,6 +126,7 @@ services:
         condition: service_completed_successfully
     ports:
       - "8449:8449"   # follower JSON-RPC
+      - "8450:8450"   # follower WebSocket (newHeads subscription)
     # Healthy once the JSON-RPC answers eth_chainId (the port opens early, before
     # full sync — which is exactly when the node's startup ChainID() would succeed).
     # vn-node gates on this in enforce mode. curl is present in the Nitro image.

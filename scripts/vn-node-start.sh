@@ -46,7 +46,11 @@ fi
 # STF: the node reads L2 from its co-located Nitro follower, which independently
 # re-executes ArbOS; its post-state root is signed into every attestation.
 FOLLOWER_RPC_URL="${FOLLOWER_RPC_URL:-http://nitro-follower:8449}"
-echo "STF: reading L2 from co-located follower ${FOLLOWER_RPC_URL}"
+# WebSocket on the same follower, used only for the newHeads subscription so
+# block pickup tracks block production instead of the poll interval. If it is
+# unreachable the node falls back to polling, so this is not load-bearing.
+FOLLOWER_WS_URL="${FOLLOWER_WS_URL:-ws://nitro-follower:8450}"
+echo "STF: reading L2 from co-located follower ${FOLLOWER_RPC_URL} (newHeads via ${FOLLOWER_WS_URL})"
 
 RELAY_HOST=$(echo "$RELAY_API_URL" | sed -E 's|https?://([^:/]+).*|\1|')
 RELAY_PORT=$(echo "$RELAY_API_URL" | sed -E 's|https?://[^:]+:([0-9]+).*|\1|')
@@ -65,6 +69,7 @@ done
 
 exec /app/vn-node \
     --follower-rpc-url "$FOLLOWER_RPC_URL" \
+    --follower-ws-url "$FOLLOWER_WS_URL" \
     --l1-rpc-url "$L1_RPC" \
     --relay-api-url "$RELAY_API_URL" \
     --http-addr ":9090" \
