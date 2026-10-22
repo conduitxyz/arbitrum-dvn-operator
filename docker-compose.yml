@@ -30,9 +30,14 @@ services:
       RELAY_RETENTION_EPOCHS: ${RELAY_RETENTION_EPOCHS:-}
       RELAY_DATA_RETENTION_EPOCHS: ${RELAY_DATA_RETENTION_EPOCHS:-}
       RELAY_PRUNER_ENABLED: ${RELAY_PRUNER_ENABLED:-}
+    # Only libp2p is public. The relay API (8080) signs whatever it is asked to
+    # with your BLS key (POST /v1/sign has no auth), so it is bound to localhost:
+    # the vn-node reaches it over the compose network, never the host port.
+    # Docker-published ports bypass host firewalls (ufw etc.), so the bind
+    # address is the only protection — keep 127.0.0.1 on everything but 8880.
     ports:
-      - "8080:8080"   # relay API
-      - "8880:8880"   # libp2p
+      - "127.0.0.1:8080:8080"   # relay API — local only
+      - "8880:8880"             # libp2p — must be reachable by peers
     restart: unless-stopped
 
   # ── VN validator node ───────────────────────────────────────────────────────
@@ -58,7 +63,7 @@ services:
       # authenticates with its header BLS key, and co-signs pulled batches.
       PROXY_PULL_URL: ${PROXY_PULL_URL:-}
     ports:
-      - "9090:9090"   # batch verifier / health API
+      - "127.0.0.1:9090:9090"   # attestation / health API — local only
     depends_on:
       relay-sidecar:
         condition: service_started
@@ -109,8 +114,8 @@ services:
       nitro-follower-init:
         condition: service_completed_successfully
     ports:
-      - "8449:8449"   # follower JSON-RPC
-      - "8450:8450"   # follower WebSocket (newHeads subscription)
+      - "127.0.0.1:8449:8449"   # follower JSON-RPC — local only
+      - "127.0.0.1:8450:8450"   # follower WebSocket (newHeads) — local only
     # Healthy once the JSON-RPC answers eth_chainId (the port opens early, before
     # full sync — which is exactly when the node's startup ChainID() would succeed).
     # vn-node gates on this in enforce mode. curl is present in the Nitro image.

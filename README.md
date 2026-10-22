@@ -138,16 +138,24 @@ How it fits together:
 
 ## Ports
 
-| Port   | Service        | Purpose                        |
-| ------ | -------------- | ------------------------------ |
-| `8080` | relay-sidecar  | relay API                      |
-| `8880` | relay-sidecar  | libp2p (peer connectivity)     |
-| `9090` | vn-node        | health + batch-verifier API    |
-| `8449` | nitro-follower | follower JSON-RPC (co-located) |
+| Port   | Service        | Purpose                                | Exposed on      |
+| ------ | -------------- | -------------------------------------- | --------------- |
+| `8880` | relay-sidecar  | libp2p (peer connectivity)             | **all interfaces** |
+| `8080` | relay-sidecar  | relay API                              | `127.0.0.1` only |
+| `9090` | vn-node        | attestation + health API               | `127.0.0.1` only |
+| `8449` | nitro-follower | follower JSON-RPC                      | `127.0.0.1` only |
+| `8450` | nitro-follower | follower WebSocket (newHeads)          | `127.0.0.1` only |
 
-If your node runs behind NAT/a firewall, make sure inbound `8880/tcp` is
-reachable so peers can connect; otherwise the node may struggle to join the
-relay network.
+Only `8880/tcp` needs to be reachable from outside; open it if you are behind
+NAT or a firewall, or the node may struggle to join the relay network.
+
+**Keep the others on `127.0.0.1`.** The relay API signs any message it is sent
+with your node's BLS key — it has no authentication — so anyone who can reach
+`8080` can make your node sign things you never verified. Docker publishes ports
+around host firewalls such as `ufw`, so the bind address in `docker-compose.yml`
+is what keeps these private. To serve the attestation API to other machines, put
+an authenticated or GET-only reverse proxy in front of `127.0.0.1:9090` rather
+than publishing the port.
 
 ---
 
