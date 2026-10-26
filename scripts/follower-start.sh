@@ -83,12 +83,15 @@ if [ "$FOLLOWER_DA_MODE" = "anytrust" ]; then
 fi
 
 echo "[follower] feed=$FOLLOWER_FEED_URL da=$FOLLOWER_DA_MODE parentBlobs=$PARENT_CHAIN_HAS_BLOBS beacon=${FOLLOWER_BEACON_URL:-<none>}"
+# log-no-history: the vn-node never queries logs, and maintaining the log index
+# stalled block import for ~60s at a time on a slow disk.
 exec /usr/local/bin/nitro \
     --chain.info-files "$CHAIN_INFO" \
     --parent-chain.connection.url "$L1_RPC" \
     --node.sequencer=false \
     --execution.sequencer.enable=false \
     --execution.forwarding-target=null \
+    --execution.rpc.log-no-history \
     --node.delayed-sequencer.enable=false \
     --node.staker.enable=false \
     --node.batch-poster.enable=false \

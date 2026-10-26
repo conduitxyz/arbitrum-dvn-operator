@@ -10,13 +10,19 @@ This bundle runs three containers:
 - **nitro-follower** — a read-only Nitro node that independently re-executes L2
   state so the vn-node verifies block state roots against a node you control.
 
-Your **operator wallet (MetaMask)** is your on-chain identity and holds your
-stake. It is **never** imported into the node: the node has its own keys, bound
-to your wallet address by signed proofs.
+Two accounts are involved, and they have different jobs:
 
-You do everything from the **DVN dashboard**: it generates your node's keys,
-registers them and your stake from your wallet, and downloads this bundle with a
-complete `.env` and your keys. You don't edit any configuration by hand.
+- **Your wallet** (MetaMask, or a hardware wallet through it) **owns your stake.**
+  It funds your operator once and holds the vault shares, so only it can
+  withdraw. It is never imported into the node.
+- **Your operator key** is your operator's on-chain identity. The dashboard
+  generates it in your browser along with the node's other keys and saves it in
+  `keys/keys.secret.json`. It sends the registration transactions itself, so on
+  testnet you approve a single wallet transaction.
+
+You do everything from the **DVN dashboard**: it generates your keys, gives you
+this bundle with a complete `.env`, and registers your operator and your stake.
+You don't edit any configuration by hand.
 
 ---
 
@@ -41,9 +47,10 @@ complete `.env` and your keys. You don't edit any configuration by hand.
 
 - **Docker** with **Compose v2** (`docker compose`, not `docker-compose`).
   Images are published for `linux/amd64` and `linux/arm64`.
-- An **operator wallet** (MetaMask or any injected wallet) holding the native
-  token for gas and the staking token. On testnets the dashboard can mint the
-  staking token for you.
+- A **wallet** (MetaMask or any injected wallet) holding a little of the parent
+  chain's native token to fund your operator key: under 0.01 HYPE on HyperEVM.
+  On networks with a real staking token it also needs the stake; on testnets
+  the operator key mints it.
 - Your own **parent-chain RPC endpoint** (e.g. a free Alchemy or QuickNode key).
   The node, relay sidecar and follower all read the parent chain continuously;
   public endpoints rate-limit and will throttle your node. You do **not** need an
@@ -54,24 +61,46 @@ complete `.env` and your keys. You don't edit any configuration by hand.
 
 ## Step 1 — Become an operator in the dashboard
 
+**Permissioned networks.** A network can require operators to be approved before
+they register (an operator whitelist). If yours does and your wallet isn't
+approved yet, send your **operator wallet address** to your Conduit contact and
+wait for confirmation before you start; otherwise registration fails partway
+through.
+
+**Staying in the set.** Run your node continuously. An operator whose node stops
+signing, or that misbehaves, can be removed from the operator set: jailed for a
+period, or blacklisted. Removal doesn't slash: your stake stays in your vault,
+and when the jail ends (or the blacklist is lifted) you rejoin from the dashboard
+with the same vault and stake.
+
 1. Open the DVN dashboard and connect your operator wallet.
 2. Click **Become an operator** and follow the steps:
-   - **Sign** one message proving your wallet owns the node's new keys (no gas).
-   - **Stake amount** — choose how much to stake (on testnets, mint it here).
-   - **Register** — approve the transactions that register your keys, register
-     you as an operator, opt you into the network and your vault, and deposit
-     your stake.
-   - **Download** — enter your parent-chain RPC URL and download your bundle.
+   - **Stake amount** — choose how much to stake.
+   - **Keys** — the dashboard generates your operator key and your node's keys.
+     Enter your parent-chain RPC URL and **download your bundle**. Nothing is
+     funded or sent until you have it, so a closed tab never strands anything.
+   - **Access** (permissioned networks only) — send the operator address shown
+     to Conduit, then click **Check again** once you're whitelisted.
+   - **Fund** — approve **one** wallet transaction that sends gas to your
+     operator key.
+   - **Register** — the operator key registers your keys, registers you as an
+     operator, opts you into the network and your vault, and deposits your
+     stake **for your wallet**. On testnets it mints the stake first; with a
+     real staking token, your wallet approves and deposits it (two more
+     prompts).
 
-Your node's keys are generated **in your browser** and are only ever written into
-the zip you download — they are never sent to Conduit or anywhere else. Keep the
-zip somewhere safe.
+Your keys are generated **in your browser** and are only ever written into the
+zip you download — they are never sent to Conduit or anywhere else. Keep the zip
+somewhere safe. If anything is interrupted after the download, reopen the
+dashboard, choose **Manage it with its keys.secret.json** and upload
+`keys/keys.secret.json`: it picks up where it stopped.
 
 The bundle contains:
 
 - `docker-compose.yml`, `scripts/` — the node itself (this repository)
 - `.env` — every setting, filled in for this network
-- `keys/keys.secret.json` — your node's **private keys**. **Back this up and keep it secret.**
+- `keys/keys.secret.json` — your **private keys**: the operator key (`operator`), the
+  node's BLS keys and its p2p identity. **Back this up and keep it secret.**
 - `keys/secret-keys.txt`, `keys/network.env` — derived from the above; read by the node
 
 ---
@@ -102,8 +131,33 @@ To stop:
 docker compose down
 ```
 
-To stop being an operator, use **Leave as operator** in the dashboard (it
-unregisters you and starts the stake withdrawal), then `docker compose down`.
+### Managing your operator
+
+Open the dashboard with the wallet that owns your stake, click **Become an
+operator**, choose **Manage it with its keys.secret.json** and upload
+`keys/keys.secret.json`. From there you can:
+
+- **Leave and withdraw** — the operator key opts out and unregisters; your
+  wallet withdraws its stake, and claims it once the vault's withdrawal delay
+  has passed (come back and upload the file again to claim). Then
+  `docker compose down`.
+- **Rejoin** — if you were removed from the operator set (below) and are
+  allowed back, one transaction re-registers you (plus any opt-ins you dropped).
+  Your keys and stake are unchanged, so a node still running with them resumes
+  signing from the next epoch.
+
+If the operator key runs low on gas for these, the dashboard asks your wallet to
+top it up first.
+
+### Removal from the operator set
+
+Conduit can remove an operator from the set: jail it for a period, blacklist it,
+or, on a permissioned network, take it off the whitelist. Removal unregisters
+the operator at once and takes effect in the validator set at the next epoch.
+It is not slashing: your stake stays in your vault, and your opt-ins and keys
+are untouched. Nothing re-registers you
+automatically: once a jail ends (or a blacklist is lifted), rejoin from the
+dashboard. You can withdraw your stake at any time, removed or not.
 
 ---
 
@@ -138,13 +192,13 @@ How it fits together:
 
 ## Ports
 
-| Port   | Service        | Purpose                                | Exposed on      |
-| ------ | -------------- | -------------------------------------- | --------------- |
-| `8880` | relay-sidecar  | libp2p (peer connectivity)             | **all interfaces** |
-| `8080` | relay-sidecar  | relay API                              | `127.0.0.1` only |
-| `9090` | vn-node        | attestation + health API               | `127.0.0.1` only |
-| `8449` | nitro-follower | follower JSON-RPC                      | `127.0.0.1` only |
-| `8450` | nitro-follower | follower WebSocket (newHeads)          | `127.0.0.1` only |
+| Port   | Service        | Purpose                       | Exposed on         |
+| ------ | -------------- | ----------------------------- | ------------------ |
+| `8880` | relay-sidecar  | libp2p (peer connectivity)    | **all interfaces** |
+| `8080` | relay-sidecar  | relay API                     | `127.0.0.1` only   |
+| `9090` | vn-node        | attestation + health API      | `127.0.0.1` only   |
+| `8449` | nitro-follower | follower JSON-RPC             | `127.0.0.1` only   |
+| `8450` | nitro-follower | follower WebSocket (newHeads) | `127.0.0.1` only   |
 
 Only `8880/tcp` needs to be reachable from outside; open it if you are behind
 NAT or a firewall, or the node may struggle to join the relay network.
@@ -199,8 +253,12 @@ one day's worth for the network's epoch length, e.g. `24` at 1-hour epochs.
 ## Security notes
 
 - `./keys/keys.secret.json` holds your private keys. Back it up securely; anyone
-  with it controls your node's signing keys. It is git-ignored — never commit it.
-- Your operator wallet's private key is never needed by, or given to, the node.
+  with it controls your node's signing keys **and your operator**: they could
+  change its registered keys or take it out of the set. It is git-ignored —
+  never commit it.
+- It **can't** move your stake: the vault shares belong to your wallet, and only
+  your wallet can withdraw them.
+- Your wallet's private key is never needed by, or given to, the node.
 - The `.env` contains your RPC URL (which may embed a provider key) but no
   private keys.
 

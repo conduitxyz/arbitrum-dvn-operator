@@ -2,8 +2,8 @@
 #
 # ── Setup ─────────────────────────────────────────────────────────────────────
 #   1. In the DVN dashboard, connect your wallet and "Become an operator". It
-#      registers your node's keys and stake, then downloads this bundle with a
-#      complete .env and your keys in ./keys.
+#      generates your keys, downloads this bundle with a complete .env and your
+#      keys in ./keys, then registers your operator and your stake.
 #   2. Unzip it and run:   docker compose up -d
 #
 # Keys live in ./keys (gitignored). keys.secret.json holds your PRIVATE keys —
