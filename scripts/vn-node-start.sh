@@ -45,6 +45,9 @@ fi
 
 # STF: the node reads L2 from its co-located Nitro follower, which independently
 # re-executes ArbOS; its post-state root is signed into every attestation.
+FEED_FLAG=""
+[ -n "${FOLLOWER_FEED_URL:-}" ] && FEED_FLAG="--sequencer-feed-url ${FOLLOWER_FEED_URL}"
+
 FOLLOWER_RPC_URL="${FOLLOWER_RPC_URL:-http://nitro-follower:8449}"
 # WebSocket on the same follower, used only for the newHeads subscription so
 # block pickup tracks block production instead of the poll interval. If it is
@@ -76,4 +79,5 @@ exec /app/vn-node \
     --address-registry-addr "$ADDRESS_REGISTRY" \
     $DB_FLAG \
     $PULL_FLAGS \
+    $FEED_FLAG \
     --log-level "${LOG_LEVEL:-info}"

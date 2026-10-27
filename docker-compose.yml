@@ -62,6 +62,9 @@ services:
       # Conduit's proxy batch-pull endpoint. When set, the node dials out to it,
       # authenticates with its header BLS key, and co-signs pulled batches.
       PROXY_PULL_URL: ${PROXY_PULL_URL:-}
+      # The chain's sequencer feed (same as the follower's). The node watches it
+      # and reports blocks that conflict with ones it attested (GET /v1/integrity).
+      FOLLOWER_FEED_URL: ${FOLLOWER_FEED_URL:-}
     ports:
       - "127.0.0.1:9090:9090"   # attestation / health API — local only
     depends_on:
