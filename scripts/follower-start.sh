@@ -25,6 +25,13 @@ set -e
 #   FOLLOWER_DA_MODE        anytrust | blob | calldata   (default calldata)
 #   FOLLOWER_DAS_URL        AnyTrust REST aggregator URL  (anytrust)
 #   FOLLOWER_DAS_ONLINE_URL AnyTrust online-url-list      (anytrust)
+#   FOLLOWER_FEED_VERIFY    true (default) | false. Accept only feed messages
+#                           signed by a key the chain's SequencerInbox registers
+#                           (isSequencer / isBatchPoster, looked up over L1_RPC
+#                           and cached for an hour), so nothing between the
+#                           sequencer and this node can inject blocks. false only
+#                           for a chain whose sequencer doesn't sign its feed.
+#   FOLLOWER_FEED_SIGNERS   comma-separated signer addresses to accept as well
 #
 # chainInfo.json is fetched + unwrapped into /config by the nitro-follower-init
 # service (alpine + jq) BEFORE this container starts, so we don't depend on the
@@ -39,6 +46,19 @@ case "$PARENT_CHAIN_HAS_BLOBS" in
     true|false) ;;
     *) echo "[follower] PARENT_CHAIN_HAS_BLOBS must be 'true' or 'false' (got '$PARENT_CHAIN_HAS_BLOBS')"; exit 1 ;;
 esac
+
+# Feed signatures. Nitro already rejects a signature from an unregistered key;
+# accept-missing=false also rejects unsigned messages, which is what makes the
+# check binding. A chain whose sequencer doesn't sign must set this false, or
+# the follower drops the feed and only advances as batches land.
+FOLLOWER_FEED_VERIFY="${FOLLOWER_FEED_VERIFY:-true}"
+VERIFY_FLAGS=""
+case "$FOLLOWER_FEED_VERIFY" in
+    true) VERIFY_FLAGS="--node.feed.input.verify.dangerous.accept-missing=false" ;;
+    false) ;;
+    *) echo "[follower] FOLLOWER_FEED_VERIFY must be 'true' or 'false' (got '$FOLLOWER_FEED_VERIFY')"; exit 1 ;;
+esac
+[ -n "${FOLLOWER_FEED_SIGNERS:-}" ] && VERIFY_FLAGS="$VERIFY_FLAGS --node.feed.input.verify.allowed-addresses=${FOLLOWER_FEED_SIGNERS}"
 FOLLOWER_BEACON_URL="${FOLLOWER_BEACON_URL:-${L1_BEACON_URL:-}}"
 if [ "$PARENT_CHAIN_HAS_BLOBS" = true ]; then
     : "${FOLLOWER_BEACON_URL:?set L1_BEACON_URL (or FOLLOWER_BEACON_URL) — the parent-chain beacon endpoint the follower reads blob batches from. Set PARENT_CHAIN_HAS_BLOBS=false if this parent chain has no beacon layer (e.g. HyperEVM)}"
@@ -82,7 +102,7 @@ if [ "$FOLLOWER_DA_MODE" = "anytrust" ]; then
     done
 fi
 
-echo "[follower] feed=$FOLLOWER_FEED_URL da=$FOLLOWER_DA_MODE parentBlobs=$PARENT_CHAIN_HAS_BLOBS beacon=${FOLLOWER_BEACON_URL:-<none>}"
+echo "[follower] feed=$FOLLOWER_FEED_URL verifyFeed=$FOLLOWER_FEED_VERIFY da=$FOLLOWER_DA_MODE parentBlobs=$PARENT_CHAIN_HAS_BLOBS beacon=${FOLLOWER_BEACON_URL:-<none>}"
 # log-no-history: the vn-node never queries logs, and maintaining the log index
 # stalled block import for ~60s at a time on a slow disk.
 exec /usr/local/bin/nitro \
@@ -96,6 +116,7 @@ exec /usr/local/bin/nitro \
     --node.staker.enable=false \
     --node.batch-poster.enable=false \
     --node.feed.input.url "$FOLLOWER_FEED_URL" \
+    $VERIFY_FLAGS \
     --http.addr 0.0.0.0 \
     --http.port 8449 \
     --http.api net,web3,eth,arb \

@@ -190,6 +190,32 @@ How it fits together:
 
 ---
 
+## Feed signatures
+
+The follower gets new blocks from the chain's sequencer feed before they reach the
+parent chain. The sequencer signs every feed message, and the follower accepts only
+messages signed by a key the chain's SequencerInbox registers (as a sequencer or
+batch poster). Nothing between the sequencer and your node — the relay, a proxy,
+the network — can feed it a block the sequencer didn't produce. This is on by default
+(`FOLLOWER_FEED_VERIFY=true` in `.env`).
+
+- You hold no key for this: only the sequencer signs.
+- The follower looks the signer up on the parent chain over `L1_RPC` when it first
+  sees it, then caches the answer for an hour — not one call per block.
+- The node's conflict watch applies the same rule: it compares only blocks the
+  sequencer signed. If the sequencer signs a block that conflicts with one your node
+  attested, the node keeps that signed message in `GET /v1/integrity`
+  (`sequencerFeed.last.evidence`). With the L2 chain id, anyone can recover the
+  signer from it and check that the sequencer offered two blocks at one height.
+- `GET /v1/integrity` shows `sequencerFeed.signatures.verified` climbing while the
+  feed is signed and checked.
+
+Set `FOLLOWER_FEED_VERIFY=false` only on a chain whose sequencer doesn't sign its feed.
+There, a follower that requires signatures drops the feed and advances only as batches
+land on the parent chain.
+
+---
+
 ## Ports
 
 | Port   | Service        | Purpose                       | Exposed on         |

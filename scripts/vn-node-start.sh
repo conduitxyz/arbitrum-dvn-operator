@@ -46,7 +46,15 @@ fi
 # STF: the node reads L2 from its co-located Nitro follower, which independently
 # re-executes ArbOS; its post-state root is signed into every attestation.
 FEED_FLAG=""
-[ -n "${FOLLOWER_FEED_URL:-}" ] && FEED_FLAG="--sequencer-feed-url ${FOLLOWER_FEED_URL}"
+if [ -n "${FOLLOWER_FEED_URL:-}" ]; then
+    FEED_FLAG="--sequencer-feed-url ${FOLLOWER_FEED_URL}"
+    # Same switch as the follower: compare only blocks the sequencer signed.
+    # Asked of the binary so a newer bundle still starts an older node image.
+    if [ "${FOLLOWER_FEED_VERIFY:-true}" = true ] \
+        && /app/vn-node --help 2>/dev/null | grep -q -- --sequencer-feed-require-signature; then
+        FEED_FLAG="${FEED_FLAG} --sequencer-feed-require-signature"
+    fi
+fi
 
 FOLLOWER_RPC_URL="${FOLLOWER_RPC_URL:-http://nitro-follower:8449}"
 # WebSocket on the same follower, used only for the newHeads subscription so

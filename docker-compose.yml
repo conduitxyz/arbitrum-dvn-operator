@@ -65,6 +65,8 @@ services:
       # The chain's sequencer feed (same as the follower's). The node watches it
       # and reports blocks that conflict with ones it attested (GET /v1/integrity).
       FOLLOWER_FEED_URL: ${FOLLOWER_FEED_URL:-}
+      # Same switch as the follower: only compare blocks the sequencer signed.
+      FOLLOWER_FEED_VERIFY: ${FOLLOWER_FEED_VERIFY:-true}
     ports:
       - "127.0.0.1:9090:9090"   # attestation / health API — local only
     depends_on:
@@ -109,6 +111,8 @@ services:
       L1_BEACON_URL: ${L1_BEACON_URL:-}
       PARENT_CHAIN_HAS_BLOBS: ${PARENT_CHAIN_HAS_BLOBS:-true}
       FOLLOWER_FEED_URL: ${FOLLOWER_FEED_URL:-}
+      FOLLOWER_FEED_VERIFY: ${FOLLOWER_FEED_VERIFY:-true}
+      FOLLOWER_FEED_SIGNERS: ${FOLLOWER_FEED_SIGNERS:-}
       FOLLOWER_DA_MODE: ${FOLLOWER_DA_MODE:-calldata}
       FOLLOWER_DAS_URL: ${FOLLOWER_DAS_URL:-}
       FOLLOWER_DAS_ONLINE_URL: ${FOLLOWER_DAS_ONLINE_URL:-}
