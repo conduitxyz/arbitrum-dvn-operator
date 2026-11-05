@@ -67,8 +67,12 @@ services:
       FOLLOWER_FEED_URL: ${FOLLOWER_FEED_URL:-}
       # Same switch as the follower: only compare blocks the sequencer signed.
       FOLLOWER_FEED_VERIFY: ${FOLLOWER_FEED_VERIFY:-true}
+      # Optional signed feed archive (/feed/v1/*), off by default. See .env.example.
+      FEED_ARCHIVE: ${FEED_ARCHIVE:-false}
+      FEED_ARCHIVE_RETENTION: ${FEED_ARCHIVE_RETENTION:-120h}
+      FEED_ARCHIVE_UPSTREAM: ${FEED_ARCHIVE_UPSTREAM:-}
     ports:
-      - "127.0.0.1:9090:9090"   # attestation / health API — local only
+      - "127.0.0.1:9090:9090"   # attestation / health API (and /feed/v1/*) — local only
     depends_on:
       relay-sidecar:
         condition: service_started

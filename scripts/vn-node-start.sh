@@ -56,6 +56,21 @@ if [ -n "${FOLLOWER_FEED_URL:-}" ]; then
     fi
 fi
 
+# Signed feed archive (optional): keeps the sequencer's signed feed messages and
+# serves them at /feed/v1/*, for a Nitro feed reader filling gaps.
+ARCHIVE_FLAGS=""
+if [ "${FEED_ARCHIVE:-false}" = true ]; then
+    [ -n "$FEED_FLAG" ] || { echo "FEED_ARCHIVE=true needs FOLLOWER_FEED_URL"; exit 1; }
+    [ -n "$DB_FLAG" ] || { echo "FEED_ARCHIVE=true needs a writable /data volume"; exit 1; }
+    if /app/vn-node --help 2>/dev/null | grep -q -- --feed-archive; then
+        ARCHIVE_FLAGS="--feed-archive --feed-archive-retention ${FEED_ARCHIVE_RETENTION:-120h}"
+        [ -n "${FEED_ARCHIVE_UPSTREAM:-}" ] && ARCHIVE_FLAGS="${ARCHIVE_FLAGS} --feed-archive-upstream ${FEED_ARCHIVE_UPSTREAM}"
+        echo "Feed archive on: /feed/v1/* on :9090 (retention ${FEED_ARCHIVE_RETENTION:-120h})"
+    else
+        echo "WARNING: FEED_ARCHIVE=true but this node image has no feed archive; upgrade VN_NODE_TAG"
+    fi
+fi
+
 FOLLOWER_RPC_URL="${FOLLOWER_RPC_URL:-http://nitro-follower:8449}"
 # WebSocket on the same follower, used only for the newHeads subscription so
 # block pickup tracks block production instead of the poll interval. If it is
@@ -88,4 +103,5 @@ exec /app/vn-node \
     $DB_FLAG \
     $PULL_FLAGS \
     $FEED_FLAG \
+    $ARCHIVE_FLAGS \
     --log-level "${LOG_LEVEL:-info}"

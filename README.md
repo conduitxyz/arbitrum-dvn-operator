@@ -214,6 +214,43 @@ Set `FOLLOWER_FEED_VERIFY=false` only on a chain whose sequencer doesn't sign it
 There, a follower that requires signatures drops the feed and advances only as batches
 land on the parent chain.
 
+### Signed feed archive (optional)
+
+Most operators don't need this; it is off by default. Turn it on
+(`FEED_ARCHIVE=true` in `.env`) if something you run reads the sequencer feed and
+needs every block with the sequencer's signature, such as an enclave that trusts
+nothing else.
+
+A feed relay replays only what it still holds in memory, which Nitro trims each time a
+batch lands on the parent chain. A reader that was away longer than that reconnects past
+where it stopped. The blocks in between are on the parent chain, but without the
+sequencer's signature. With the archive on, the node keeps every signed feed message
+unchanged and serves them on `:9090`, the same way Nitro v3.12.1+ feed readers fill gaps:
+
+| Endpoint | Returns |
+|---|---|
+| `GET /feed/v1/info` | `{"chainId", "feedVersion": 1, "chunkSize": 64}` |
+| `GET /feed/v1/chunk/{start}` | `{"version": 1, "messages": [...]}`: the 64 messages from `start` (a multiple of 64), gzipped when the client accepts it |
+| `GET /feed/v1/status` | what the archive holds, and any gaps |
+
+Point a Nitro reader at it with
+`--node.feed.input.rest.enable --node.feed.input.rest.url=http://<this host>:9090`.
+A custom reader verifies each message's `signatureV2` exactly as it would on the
+websocket.
+
+- It keeps only messages signed by a key the SequencerInbox registers, and serves a chunk
+  once all its blocks are on the parent chain and match your follower. A served chunk
+  never changes.
+- It holds messages from when you turned it on, for `FEED_ARCHIVE_RETENTION` (default
+  `120h`, by L2 block time).
+- If the node itself was down longer than the relay replays, it has a gap too.
+  `FEED_ARCHIVE_UPSTREAM` names other archives to fill it from, such as the one the DVN
+  publishes. Every message is checked against the sequencer's signature and your
+  follower, so they needn't be trusted.
+- `:9090` is published on `127.0.0.1` only. If the reader runs on another machine, put
+  a GET-only reverse proxy in front of it (see [Ports](#ports)) rather than publishing
+  the port.
+
 ---
 
 ## Ports
@@ -222,7 +259,7 @@ land on the parent chain.
 | ------ | -------------- | ----------------------------- | ------------------ |
 | `8880` | relay-sidecar  | libp2p (peer connectivity)    | **all interfaces** |
 | `8080` | relay-sidecar  | relay API                     | `127.0.0.1` only   |
-| `9090` | vn-node        | attestation + health API      | `127.0.0.1` only   |
+| `9090` | vn-node        | attestation + health API (and `/feed/v1/*` with `FEED_ARCHIVE`) | `127.0.0.1` only   |
 | `8449` | nitro-follower | follower JSON-RPC             | `127.0.0.1` only   |
 | `8450` | nitro-follower | follower WebSocket (newHeads) | `127.0.0.1` only   |
 
