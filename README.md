@@ -30,20 +30,20 @@ You don't edit any configuration by hand.
 
 - **Hardware** (a single host running all containers):
 
-  | Resource | Minimum             | Recommended |
+  | Resource | Quiet chain         | Busy chain (e.g. a few blocks/s, months of history) |
   | -------- | ------------------- | ----------- |
-  | CPU      | 2 vCPU              | 4 vCPU      |
-  | Memory   | 4 GB                | 8 GB        |
-  | Disk     | 100 GB SSD          | 200 GB SSD  |
-  | Network  | Reliable, unmetered | —           |
+  | CPU      | 4 vCPU              | 8 vCPU      |
+  | Memory   | 8 GB                | 16–32 GB    |
+  | Disk     | 200 GB SSD          | 300 GB+ NVMe SSD |
+  | Network  | Reliable, unmetered | Reliable, unmetered; fast enough to download the snapshot (~90 GB) |
 
   Most of this is the **Nitro follower** (`nitro-follower`), which independently
   re-executes ArbOS from the feed — it is CPU-bursty during sync/catch-up and holds
   the chain state on disk (grows with the chain). Undersized hosts are the most
   common cause of a node that "won't start" or falls behind: a CPU-starved follower
   can't complete its L1 TLS handshake and crash-loops, taking the vn-node with it.
-  SSD (not HDD) is required for acceptable follower sync. Sizing will vary with
-  chain age/throughput — start here and scale up if the follower lags.
+  SSD (not HDD) is required for acceptable follower sync. The DVN tells you which
+  column your network is in; scale up if the follower lags.
 
 - **Docker** with **Compose v2** (`docker compose`, not `docker-compose`).
   Images are published for `linux/amd64` and `linux/arm64`.
@@ -113,6 +113,20 @@ cd dvn-operator-*/
 docker compose up -d
 ```
 
+If you entered a **follower snapshot URL** in the dashboard (or set
+`FOLLOWER_SNAPSHOT_URL` in `.env`), `docker compose up -d` first downloads the
+snapshot into the follower's volume and waits until that's done: ~90 GB, from
+half an hour to a couple of hours depending on your connection. Follow it from
+another terminal:
+
+```bash
+docker compose logs -f nitro-follower-restore
+```
+
+If you interrupt `up -d`, the download carries on in the background; run
+`docker compose up -d` again and it waits for it. See
+[Start from a snapshot](#start-from-a-snapshot).
+
 Check status:
 
 ```bash
@@ -120,10 +134,11 @@ docker compose logs -f
 curl -s localhost:9090/health
 ```
 
-The follower first syncs the L2 chain, which can take a while on a long-lived
-chain. Your stake joins the validator set at the **next epoch boundary**, so your
-node starts signing up to one epoch after you register; the dashboard shows you
-as an operator from then on.
+The follower then catches up to the head of the L2 chain: from the snapshot's
+block if you used one, otherwise from genesis, which can take days on a
+long-lived chain. Your stake joins the validator set at the **next epoch
+boundary**, so your node starts signing up to one epoch after you register; the
+dashboard shows you as an operator from then on.
 
 To stop:
 
@@ -186,7 +201,45 @@ How it fits together:
   (`depends_on: service_healthy`) before starting, so it never crash-restarts while
   the follower boots. The node dials `http://nitro-follower:8449` for L2.
 - The follower's first sync re-executes history from the feed and can take a while
-  depending on chain size.
+  depending on chain size, unless it starts from a snapshot (below).
+
+### Start from a snapshot
+
+Re-executing a chain from genesis takes days or weeks once it has run a while.
+The DVN publishes a daily snapshot of a full node's database instead; it gives
+you a download link for it (on networks where the link is private, a signed URL
+valid for a few days). Enter it in the dashboard's **Keys** step, or set it in
+`.env`:
+
+```bash
+FOLLOWER_SNAPSHOT_URL=https://...
+```
+
+On `docker compose up -d`, the one-shot `nitro-follower-restore` container
+checks the follower's volume. If it's empty, it streams the snapshot straight
+into it (`curl | tar -x`, so it needs the snapshot's size free, not twice that),
+hands the files to the follower's user, and records the snapshot's state scheme.
+The follower then starts with that scheme (`path` for the DVN's snapshots: Nitro
+refuses a database written with a different one) and catches up only the blocks
+since the snapshot.
+
+- **It runs only on an empty volume.** Once the follower has a database the URL is
+  ignored, so leaving a signed URL in `.env` after it expires is harmless.
+- **It checks first.** An expired or wrong link fails at once with the reason,
+  before anything is downloaded, as does a volume with too little free space.
+- **It cleans up.** A download that fails is retried from the start
+  (`FOLLOWER_SNAPSHOT_ATTEMPTS`, default 3); one that was interrupted is wiped and
+  started over on the next `up -d`.
+- **To start over** from a fresh snapshot: `docker compose down`, then
+  `docker volume rm <project>_follower-data`, then `docker compose up -d`.
+- **The follower image must be at least as new as the Nitro that wrote the
+  snapshot** (v3.12 for the DVN's snapshots); the bundle's `NITRO_FOLLOWER_IMAGE`
+  is.
+- **A snapshot doesn't ask you to trust it.** Your follower re-executes every
+  block after it, and your node signs the state roots it computes. A tampered
+  snapshot would give state roots no other operator agrees with, so your
+  signatures would never count toward a quorum: it can stall your node, not make
+  it vouch for a bad state.
 
 ---
 

@@ -98,12 +98,35 @@ services:
       FOLLOWER_CHAIN_INFO_URL: ${FOLLOWER_CHAIN_INFO_URL:-}
     restart: "no"
 
+  # ── Snapshot restore (one-shot init for the follower) ─────────────────────
+  # With FOLLOWER_SNAPSHOT_URL set and an empty follower volume, streams the
+  # snapshot into the volume before the follower starts, so it catches up from the
+  # snapshot's block instead of syncing from genesis. `docker compose up -d` waits
+  # until it's done (`docker compose logs -f nitro-follower-restore` shows progress);
+  # interrupting it leaves it running, and running `up -d` again waits for it. Does
+  # nothing once the volume holds a database. See scripts/follower-restore.sh.
+  nitro-follower-restore:
+    image: alpine:3.20
+    container_name: dvn-nitro-follower-restore
+    entrypoint: ["/bin/sh", "/scripts/follower-restore.sh"]
+    volumes:
+      - ./scripts/follower-restore.sh:/scripts/follower-restore.sh:ro
+      - follower-config:/config:ro
+      - follower-data:/home/user/.arbitrum
+    environment:
+      FOLLOWER_SNAPSHOT_URL: ${FOLLOWER_SNAPSHOT_URL:-}
+      FOLLOWER_SNAPSHOT_STATE_SCHEME: ${FOLLOWER_SNAPSHOT_STATE_SCHEME:-path}
+    depends_on:
+      nitro-follower-init:
+        condition: service_completed_successfully
+    restart: "no"
+
   # ── Nitro follower (STF verification) ─────────────────────────────────────
   # Read-only, feed-following Nitro node. Independently re-executes ArbOS so the
   # vn-node reads L2 state roots from a node the operator controls. Always on —
   # the vn-node reads L2 from it (http://nitro-follower:8449).
   nitro-follower:
-    image: ${NITRO_FOLLOWER_IMAGE:-offchainlabs/nitro-node:v3.11.3-beb2108}
+    image: ${NITRO_FOLLOWER_IMAGE:-offchainlabs/nitro-node:v3.12.1-70fa99a}
     container_name: dvn-nitro-follower
     entrypoint: ["/bin/sh", "/scripts/follower-start.sh"]
     volumes:
@@ -121,8 +144,11 @@ services:
       FOLLOWER_DAS_URL: ${FOLLOWER_DAS_URL:-}
       FOLLOWER_DAS_ONLINE_URL: ${FOLLOWER_DAS_ONLINE_URL:-}
       FOLLOWER_BEACON_URL: ${FOLLOWER_BEACON_URL:-}
+      FOLLOWER_STATE_SCHEME: ${FOLLOWER_STATE_SCHEME:-}
     depends_on:
       nitro-follower-init:
+        condition: service_completed_successfully
+      nitro-follower-restore:
         condition: service_completed_successfully
     ports:
       - "127.0.0.1:8449:8449"   # follower JSON-RPC — local only

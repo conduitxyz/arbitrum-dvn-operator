@@ -102,7 +102,23 @@ if [ "$FOLLOWER_DA_MODE" = "anytrust" ]; then
     done
 fi
 
-echo "[follower] feed=$FOLLOWER_FEED_URL verifyFeed=$FOLLOWER_FEED_VERIFY da=$FOLLOWER_DA_MODE parentBlobs=$PARENT_CHAIN_HAS_BLOBS beacon=${FOLLOWER_BEACON_URL:-<none>}"
+# State scheme: Nitro refuses a database written with a different scheme than the
+# one it starts with, and defaults to hash. FOLLOWER_STATE_SCHEME sets it; unset,
+# a database restored from a snapshot (follower-restore.sh) uses the snapshot's
+# (path for the DVN's), and any other the Nitro default.
+STATE_SCHEME="${FOLLOWER_STATE_SCHEME:-}"
+SNAPSHOT_MARKER=/home/user/.arbitrum/.dvn-snapshot
+if [ -z "$STATE_SCHEME" ] && [ -f "$SNAPSHOT_MARKER" ]; then
+    STATE_SCHEME=$(sed -n 's/^state-scheme=//p' "$SNAPSHOT_MARKER")
+fi
+SCHEME_FLAGS=""
+case "$STATE_SCHEME" in
+    "") ;;
+    hash|path) SCHEME_FLAGS="--execution.caching.state-scheme=$STATE_SCHEME" ;;
+    *) echo "[follower] FOLLOWER_STATE_SCHEME must be 'hash' or 'path' (got '$STATE_SCHEME')"; exit 1 ;;
+esac
+
+echo "[follower] feed=$FOLLOWER_FEED_URL verifyFeed=$FOLLOWER_FEED_VERIFY da=$FOLLOWER_DA_MODE parentBlobs=$PARENT_CHAIN_HAS_BLOBS beacon=${FOLLOWER_BEACON_URL:-<none>} stateScheme=${STATE_SCHEME:-default}"
 # log-no-history: the vn-node never queries logs, and maintaining the log index
 # stalled block import for ~60s at a time on a slow disk.
 exec /usr/local/bin/nitro \
@@ -126,4 +142,5 @@ exec /usr/local/bin/nitro \
     --ws.port 8450 \
     --ws.origins '*' \
     --ensure-rollup-deployment=false \
+    $SCHEME_FLAGS \
     $DA_FLAGS
