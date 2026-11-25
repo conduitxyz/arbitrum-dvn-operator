@@ -113,17 +113,27 @@ cd dvn-operator-*/
 docker compose up -d
 ```
 
-If you entered a **follower snapshot URL** in the dashboard (or set
-`FOLLOWER_SNAPSHOT_URL` in `.env`), `docker compose up -d` first downloads the
-snapshot into the follower's volume and waits until that's done: ~90 GB, from
-half an hour to a couple of hours depending on your connection. Follow it from
-another terminal:
+**Start from a snapshot** if the DVN publishes one: it saves re-executing the chain
+from genesis, which takes days on a long-lived chain. Before `docker compose up
+-d`, either download it into the bundle's `snapshot/` folder (the DVN's full-node
+snapshot is in a requester-pays bucket: you need a Google Cloud project with
+billing), or use a link the DVN gave you (entered in the dashboard, or
+`FOLLOWER_SNAPSHOT_URL` in `.env`):
+
+```bash
+gcloud storage cp gs://conduit-networks-snapshots/<chain>/full/latest.tar ./snapshot/ --billing-project=<your-project>
+docker compose up -d
+```
+
+`docker compose up -d` then restores the snapshot into the follower's volume and
+waits until that's done (from minutes for a local file, to an hour or two for a
+link). Follow it from another terminal:
 
 ```bash
 docker compose logs -f nitro-follower-restore
 ```
 
-If you interrupt `up -d`, the download carries on in the background; run
+If you interrupt `up -d`, the restore carries on in the background; run
 `docker compose up -d` again and it waits for it. See
 [Start from a snapshot](#start-from-a-snapshot).
 
@@ -206,29 +216,55 @@ How it fits together:
 ### Start from a snapshot
 
 Re-executing a chain from genesis takes days or weeks once it has run a while.
-The DVN publishes a daily snapshot of a full node's database instead; it gives
-you a download link for it (on networks where the link is private, a signed URL
-valid for a few days). Enter it in the dashboard's **Keys** step, or set it in
-`.env`:
+The DVN publishes a snapshot of a full node's database instead (refreshed
+periodically: the DVN tells you how often), as a tar of the node's data
+directory. The restore takes it from one of two places:
+
+**A file in `snapshot/`.** The DVN's snapshots are in a Google Cloud Storage
+bucket that's requester-pays: the download (~90 GB for a busy chain, ~$11 of
+Google's egress) is billed to your own Google Cloud project. You need the
+[`gcloud` CLI](https://cloud.google.com/sdk/docs/install), logged in
+(`gcloud auth login`), and a project with billing enabled on which your account
+has `roles/serviceusage.serviceUsageConsumer` (project Owners and Editors do).
+From the bundle folder:
+
+```bash
+gcloud storage objects describe gs://conduit-networks-snapshots/<chain>/full/latest.tar   --billing-project=<your-project> --format="value(size,updated)"     # size, and when it was taken
+gcloud storage cp gs://conduit-networks-snapshots/<chain>/full/latest.tar ./snapshot/ --billing-project=<your-project>
+docker compose up -d
+rm snapshot/latest.tar     # once the node is up: it isn't used again
+```
+
+`gcloud` downloads in parallel and checks the file against the bucket's checksum;
+until it's done the file is `latest.tar_.gstmp`, and `docker compose up -d` stops
+with a message rather than start the follower from genesis. A snapshot split into
+parts (`snapshot_part_*.tar.part`, over 5 TB) works the same: download the parts
+into `snapshot/`. This needs the snapshot's size free twice over until you delete
+the file.
+
+**A link** (a public URL, or a signed one the DVN sent you). Enter it in the
+dashboard's **Keys** step, or set it in `.env`:
 
 ```bash
 FOLLOWER_SNAPSHOT_URL=https://...
 ```
 
-On `docker compose up -d`, the one-shot `nitro-follower-restore` container
-checks the follower's volume. If it's empty, it streams the snapshot straight
-into it (`curl | tar -x`, so it needs the snapshot's size free, not twice that),
-hands the files to the follower's user, and records the snapshot's state scheme.
-The follower then starts with that scheme (`path` for the DVN's snapshots: Nitro
-refuses a database written with a different one) and catches up only the blocks
-since the snapshot.
+It's streamed straight into the volume (`curl | tar -x`), so it needs the
+snapshot's size free only once. A file in `snapshot/` wins over a link.
 
-- **It runs only on an empty volume.** Once the follower has a database the URL is
-  ignored, so leaving a signed URL in `.env` after it expires is harmless.
-- **It checks first.** An expired or wrong link fails at once with the reason,
-  before anything is downloaded, as does a volume with too little free space.
-- **It cleans up.** A download that fails is retried from the start
-  (`FOLLOWER_SNAPSHOT_ATTEMPTS`, default 3); one that was interrupted is wiped and
+Either way, on `docker compose up -d` the one-shot `nitro-follower-restore`
+container checks the follower's volume. If it's empty, it extracts the snapshot
+into it, hands the files to the follower's user, and records the snapshot's state
+scheme. The follower then starts with that scheme (`path` for the DVN's
+snapshots: Nitro refuses a database written with a different one) and catches up
+only the blocks since the snapshot.
+
+- **It runs only on an empty volume.** Once the follower has a database, a file
+  left in `snapshot/` or a link left in `.env` (even an expired one) is ignored.
+- **It checks first.** An unfinished download, an expired or wrong link, or a
+  volume with too little free space fails at once with the reason.
+- **It cleans up.** A failed link download is retried from the start
+  (`FOLLOWER_SNAPSHOT_ATTEMPTS`, default 3); an interrupted restore is wiped and
   started over on the next `up -d`.
 - **To start over** from a fresh snapshot: `docker compose down`, then
   `docker volume rm <project>_follower-data`, then `docker compose up -d`.

@@ -99,9 +99,10 @@ services:
     restart: "no"
 
   # ── Snapshot restore (one-shot init for the follower) ─────────────────────
-  # With FOLLOWER_SNAPSHOT_URL set and an empty follower volume, streams the
-  # snapshot into the volume before the follower starts, so it catches up from the
-  # snapshot's block instead of syncing from genesis. `docker compose up -d` waits
+  # On an empty follower volume, restores a snapshot into it before the follower
+  # starts, so it catches up from the snapshot's block instead of syncing from
+  # genesis: snapshot/latest.tar (e.g. downloaded with gcloud; see
+  # snapshot/README.md), else FOLLOWER_SNAPSHOT_URL. `docker compose up -d` waits
   # until it's done (`docker compose logs -f nitro-follower-restore` shows progress);
   # interrupting it leaves it running, and running `up -d` again waits for it. Does
   # nothing once the volume holds a database. See scripts/follower-restore.sh.
@@ -111,6 +112,7 @@ services:
     entrypoint: ["/bin/sh", "/scripts/follower-restore.sh"]
     volumes:
       - ./scripts/follower-restore.sh:/scripts/follower-restore.sh:ro
+      - ./snapshot:/snapshot:ro
       - follower-config:/config:ro
       - follower-data:/home/user/.arbitrum
     environment:

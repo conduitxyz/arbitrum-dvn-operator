@@ -6,3 +6,7 @@ keys/
 .env
 .env.*
 !.env.example
+
+# A downloaded follower snapshot (tens of GB): keep only the folder's README.
+snapshot/*
+!snapshot/README.md
